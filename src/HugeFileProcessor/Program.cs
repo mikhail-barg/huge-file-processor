@@ -10,18 +10,23 @@ namespace HugeFileProcessor
 {
     internal sealed class Program
     {
-        private static readonly char[] STR_SPLIT = new char[] { ' ' };
+        private const int VERBOSE_LINES_COUNT = 100000;
 
         static void Main(string[] args)
         {
             if (args.Length > 0)
             {
-                switch (args[0])
+                switch (args[0].ToLower())
                 {
                 case "-shuffle":
-                    MainShuffle(args[1], Int32.Parse(args[2]), args.Length == 4 ? args[3] : args[1] + ".shuffled");
-                    return;
+                    if (args.Length == 3 || args.Length == 4)
+                    {
+                        MainShuffle(args[1], Int32.Parse(args[2]), args.Length == 4 ? args[3] : args[1] + ".shuffled");
+                        return;
+                    }
+                    break;
                 case "-split":
+                    if (args.Length == 3 || args.Length == 4)
                     {
                         string[] splitFracStr = args[2].Split('/');     //a fraction of test data in form "1/10". To skip creation of test data, use "0/1"
                         int testFracUp = Int32.Parse(splitFracStr[0]);
@@ -29,24 +34,39 @@ namespace HugeFileProcessor
                         int processLinesLimit = args.Length == 4 ? Int32.Parse(args[3]) : -1;   //number of lines to process from file or -1 if all.
 
                         MainSplit(args[1], testFracUp, testFracDown, processLinesLimit);
+                        return;
                     }
-                    return;
+                    break;
+                case "-count":
+                    if (args.Length == 2)
+                    {
+                        TimeSpan singlePassTime;
+                        int linesCount = CountLines(args[1], out singlePassTime);
+                        Console.WriteLine();
+                        Console.WriteLine(linesCount);
+                        return;
+                    }
+                    break;
                 }
             }
             Console.WriteLine("Usage :");
             Console.WriteLine("-split <sourceFile> <test>/<base> [<linesLimit>]\n\tsplits <sourceFile> to test and train, so that test file get (<test>/<base>) fraction of lines.\n\tSet 0 to <test> to skip test file creation.\n\t<linesLimit> - total number of lines to proces from <sourceFile>, set to -1 or skip to read all lines.\n\n");
             Console.WriteLine("-shuffle <sourceFile> <batchSize> [<outFile>]\n\tshuffles lines from <sourceFile> to <outFile>.\n\t<batchSize> is in lines.\n\n");
+            Console.WriteLine("-count <sourceFile>\n\tjust count lines int <sourceFile>\n\n");
             Environment.Exit(1);
         }
 
         #region shuffle
         private static void MainShuffle(string sourceFileName, int batchSizeLines, string targetFileName)
         {
+            Console.WriteLine($"Shuffling lines from {sourceFileName} to {targetFileName} in batches of {batchSizeLines:N0}");
+            Console.WriteLine();
+
             TimeSpan singlePassTime;
             int linesCount = CountLines(sourceFileName, out singlePassTime);
-            double batchesCount = linesCount * 1.0 / batchSizeLines;
+            int batchesCount = (int)Math.Ceiling(linesCount * 1.0 / batchSizeLines);
             Console.WriteLine();
-            Console.WriteLine($"Expecting {batchesCount:N3} batches, that would take {TimeSpan.FromSeconds(Math.Ceiling(batchesCount) * singlePassTime.TotalSeconds)}");
+            Console.WriteLine($"Expecting {batchesCount:N0} batches, that would take {TimeSpan.FromSeconds(batchesCount * singlePassTime.TotalSeconds)}");
             Console.WriteLine();
 
             int[] orderArray = GetOrderArray(linesCount);
@@ -68,7 +88,7 @@ namespace HugeFileProcessor
                     }
                     ProcessBatch(sourceFileName, orderArray, batchStart, batchEnd, writer);
                     TimeSpan took = DateTime.UtcNow - start;
-                    Console.WriteLine($"Batch done, took {took}, speed {batchEnd / took.TotalSeconds:N0} lps. Remaining {TimeSpan.FromSeconds((batchesCount - batchIndex) * took.TotalSeconds / batchIndex)}");
+                    Console.WriteLine($"Batch done, took {took}, speed is {batchEnd / took.TotalSeconds:N0} lps. Remaining {TimeSpan.FromSeconds((batchesCount - batchIndex) * took.TotalSeconds / batchIndex)}");
                     Console.WriteLine();
                 }
             }
@@ -114,33 +134,26 @@ namespace HugeFileProcessor
 
         private static int CountLines(string fileName, out TimeSpan totalTime)
         {
-            Console.WriteLine("Counting lines");
+            Console.WriteLine($"Counting lines in {fileName}");
             DateTime start = DateTime.UtcNow;
 
             int linesCount = 0;
-            //using (StreamReader sr = File.OpenText(fileName))
+            foreach (string s in File.ReadLines(fileName))
             {
-
-                //string s = String.Empty;
-                //while ((s = sr.ReadLine()) != null)
-                foreach (string s in File.ReadLines(fileName))
+                if (string.IsNullOrWhiteSpace(s))
                 {
-                    if (string.IsNullOrWhiteSpace(s))
-                    {
-                        continue;
-                    }
-                    ++linesCount;
+                    continue;
+                }
+                ++linesCount;
 
-                    if (linesCount % 100000 == 0)
-                    {
-                        TimeSpan took = DateTime.UtcNow - start;
-                        Console.WriteLine($"Current count is {linesCount:N0}, took {took}, speed is {linesCount / took.TotalSeconds:N0} lps");
-                    }
+                if (linesCount % VERBOSE_LINES_COUNT == 0)
+                {
+                    TimeSpan took = DateTime.UtcNow - start;
+                    Console.WriteLine($"Current count is {linesCount:N0}, took {took}, speed is {linesCount / took.TotalSeconds:N0} lps");
                 }
             }
             totalTime = DateTime.UtcNow - start;
-            Console.WriteLine($"Done. Lines count is {linesCount:N0}, took {totalTime}, speed {linesCount / totalTime.TotalSeconds:N0} lps");
-
+            Console.WriteLine($"Done. Lines count is {linesCount:N0}, took {totalTime}, speed is {linesCount / totalTime.TotalSeconds:N0} lps");
 
             return linesCount;
         }
@@ -171,6 +184,14 @@ namespace HugeFileProcessor
         #region split
         private static void MainSplit(string sourceFileName, int testFracUp, int testFracDown, int processLinesLimit)
         {
+            if (testFracUp > 0)
+            {
+                Console.WriteLine($"Splitting lines from {sourceFileName} into .test and .train parts. Test gets {testFracUp}/{testFracDown}, train gets {testFracDown-testFracUp}/{testFracDown}");
+            }
+            else
+            {
+                Console.WriteLine($"Processing lines from {sourceFileName} into .train");
+            }
             string outFileInfix = "";
             if (processLinesLimit < 0)
             {
@@ -179,45 +200,26 @@ namespace HugeFileProcessor
             else
             {
                 outFileInfix = "." + processLinesLimit.ToString();
+                Console.WriteLine($"Limiting total lines number to {processLinesLimit}");
             }
 
             using (StreamWriter trainWriter = new StreamWriter(sourceFileName + outFileInfix + ".train"))
             {
-                using (StreamWriter testWtier = testFracUp <= 0 ? null : new StreamWriter(sourceFileName + outFileInfix + ".test"))
+                using (StreamWriter testWriter = testFracUp <= 0 ? null : new StreamWriter(sourceFileName + outFileInfix + ".test"))
                 {
                     int lineIndex = 0;
-
-                    //int elementsCount = -1;
                     foreach (string sourceLine in File.ReadLines(sourceFileName))
                     {
                         ++lineIndex;
-                        /*
-                        string[] elements = sourceLine.Split(STR_SPLIT);
-                        if (elementsCount < 0)
-                        {
-                            elementsCount = elements.Length;
-                            Console.WriteLine($"Elements count is {elementsCount}");
-                        }
-                        else if (elementsCount != elements.Length)
-                        {
-                            Console.WriteLine($"Elements count failed on line {lineIndex}. Stopping");
-                            break;
-                        }
-                        if (sourceLine.Contains("  "))
-                        {
-                            Console.WriteLine($"Weird two-space found on line {lineIndex}. Stopping");
-                            break;
-                        }
-                        */
                         if ((lineIndex - 1) % testFracDown < testFracUp)
                         {
-                            testWtier.WriteLine(sourceLine);
+                            testWriter.WriteLine(sourceLine);
                         }
                         else
                         {
                             trainWriter.WriteLine(sourceLine);
                         }
-                        if (lineIndex % 10000 == 0)
+                        if (lineIndex % VERBOSE_LINES_COUNT == 0)
                         {
                             Console.WriteLine($"Processed {lineIndex} lines");
                         }
@@ -236,7 +238,7 @@ namespace HugeFileProcessor
         public static void RunLOHDefragmentation()
         {
             DateTime started = DateTime.UtcNow;
-            Console.WriteLine($"Collecting and defragging LOH... ");
+            //Console.WriteLine($"Collecting and defragging LOH... ");
 
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
 
@@ -245,7 +247,7 @@ namespace HugeFileProcessor
             GC.WaitForFullGCComplete();
             GC.Collect();
 
-            Console.WriteLine($"Collecting and defragging LOH... done in {DateTime.UtcNow - started}");
+            //Console.WriteLine($"Collecting and defragging LOH... done in {DateTime.UtcNow - started}");
         }
 
     }
