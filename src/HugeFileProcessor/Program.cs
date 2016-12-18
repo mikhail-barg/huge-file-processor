@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime;
 using System.Text;
 using System.Threading.Tasks;
@@ -14,8 +15,12 @@ namespace HugeFileProcessor
 
         private static Encoding encoding = Encoding.Default;
 
+        private static string MonoVersion = null;
+
         static void Main(string[] args)
         {
+            MonoVersion = GetMonoVersion();
+
             Console.WriteLine("Checking GC compartibility");
             RunGC();
 
@@ -145,7 +150,7 @@ namespace HugeFileProcessor
         private static void ProcessBatch(string sourceFileName, int[] orderArray, int batchStart, int batchEnd, StreamWriter writer)
         {
             int batchSize = batchEnd - batchStart + 1;
-            KeyValuePair<int, int>[] batchLines = new KeyValuePair<int, int>[batchEnd - batchStart + 1];
+            KeyValuePair<int, int>[] batchLines = new KeyValuePair<int, int>[batchSize];
             for (int i = 0; i < batchSize; ++i)
             {
                 batchLines[i] = new KeyValuePair<int, int>(orderArray[batchStart + i], i);
@@ -347,9 +352,24 @@ namespace HugeFileProcessor
             writer = new StreamWriter(fileName, false, encoding);
         }
 
-        public static bool IsRunningOnMono()
+        public static string GetMonoVersion()
         {
-            return Type.GetType("Mono.Runtime") != null;
+            Console.WriteLine("System.Environment.Version = " + System.Environment.Version);
+            Type monoRuntimeType = Type.GetType("Mono.Runtime");
+            if (monoRuntimeType == null)
+            {
+                Console.WriteLine("Not running on Mono");
+                return null;
+            }
+            //see http://stackoverflow.com/questions/8413922/programmatically-determining-mono-runtime-version
+            MethodInfo mi = monoRuntimeType.GetMethod("GetDisplayName", BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.IgnoreCase);
+            string result = (string)mi.Invoke(null, null);
+
+            //sample strings are:
+            //3.2.8 (Debian 3.2.8+dfsg-4ubuntu1.1)
+            //
+            Console.WriteLine("Got Mono version: '" + result + "'");
+            return result;
         }
 
         public static void RunGC()
@@ -357,11 +377,17 @@ namespace HugeFileProcessor
             Console.WriteLine($"Starting GC");
             DateTime started = DateTime.UtcNow;
 
-            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            if (MonoVersion == null || !MonoVersion.StartsWith("3"))
+            {
+                //no LargeObjectHeapCompactionMode in Mono 3
+                SetupLohMode();
+            }
             GC.Collect();
             GC.WaitForPendingFinalizers();
-            if (!IsRunningOnMono())
+            Console.WriteLine($"D");
+            if (MonoVersion == null)
             {
+                //WaitForFullGCComplete throws NotImplementedException in Mono 3 and 4
                 GC.WaitForFullGCComplete();
             }
             else
@@ -372,5 +398,11 @@ namespace HugeFileProcessor
             Console.WriteLine($"GC collection including LOH done in {DateTime.UtcNow - started}");
         }
 
+        //Need separate func othervise it would not work on Mono3:
+        //throws System.TypeLoadException: Could not load type 'System.Runtime.GCLargeObjectHeapCompactionMode'
+        public static void SetupLohMode()
+        {
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+        }
     }
 }
