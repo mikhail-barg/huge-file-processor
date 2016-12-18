@@ -16,6 +16,9 @@ namespace HugeFileProcessor
 
         static void Main(string[] args)
         {
+            Console.WriteLine("Checking GC compartibility");
+            RunGC();
+
             if (args.Length > 0)
             {
                 if (args[0].ToLower() == "-enc" && args.Length > 1)
@@ -174,7 +177,7 @@ namespace HugeFileProcessor
                 writer.WriteLine(writeLine);
             }
 
-            RunLOHDefragmentation();
+            RunGC();
         }
 
         private static int CountLines(string fileName, out TimeSpan totalTime)
@@ -349,22 +352,24 @@ namespace HugeFileProcessor
             return Type.GetType("Mono.Runtime") != null;
         }
 
-        public static void RunLOHDefragmentation()
+        public static void RunGC()
         {
+            Console.WriteLine($"Starting GC");
             DateTime started = DateTime.UtcNow;
-            //Console.WriteLine($"Collecting and defragging LOH... ");
 
-            if (!IsRunningOnMono())
-            {
-                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-            }
-
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
             GC.Collect();
             GC.WaitForPendingFinalizers();
-            GC.WaitForFullGCComplete();
+            if (!IsRunningOnMono())
+            {
+                GC.WaitForFullGCComplete();
+            }
+            else
+            {
+                Console.WriteLine("Mono detected, skipping GC.WaitForFullGCComplete()");
+            }
             GC.Collect();
-
-            //Console.WriteLine($"Collecting and defragging LOH... done in {DateTime.UtcNow - started}");
+            Console.WriteLine($"GC collection including LOH done in {DateTime.UtcNow - started}");
         }
 
     }
